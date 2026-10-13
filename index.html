@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b0d10">
+<meta name="description" content="A simple teleprompter for your phone. Paste a script, turn the phone sideways, press play.">
+<title>Teleprompter</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=Manrope:wght@500;700&display=swap">
+<style>
+/* Full-screen stage: text scrolls past a fixed reading line, controls float at the bottom. */
+:root {
+  --bg: #0b0d10;
+  --panel: #171a20;
+  --line: #2a2f38;
+  --fg: #f4f1e8;
+  --muted: #8b93a1;
+  --cue: #ffcc33;
+  --font-read: "Atkinson Hyperlegible", "Segoe UI", Roboto, Arial, sans-serif;
+  --font-ui: "Manrope", "Segoe UI", Roboto, Arial, sans-serif;
+  color-scheme: dark;
+}
+*, *::before, *::after { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { background: var(--bg); color: var(--fg); font-family: var(--font-ui); overflow: hidden; -webkit-tap-highlight-color: transparent; }
+
+/* ---------- Editor ---------- */
+#editor { height: 100%; display: flex; flex-direction: column; gap: 12px; padding-block: 12px; padding-inline: max(16px, env(safe-area-inset-left, 0px)) max(16px, env(safe-area-inset-right, 0px)); box-sizing: border-box; }
+.ed-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.ed-head h1 { margin: 0; font-size: 1.1rem; font-weight: 700; letter-spacing: .02em; }
+.ed-head h1 span { color: var(--cue); }
+.hint { color: var(--muted); font-size: .85rem; }
+#script { flex: 1; min-height: 0; width: 100%; box-sizing: border-box; resize: none; background: var(--panel); color: var(--fg); border: 1px solid var(--line); border-radius: 10px; padding: 14px; font: 1.05rem/1.5 var(--font-read); }
+#script:focus { outline: 2px solid var(--cue); outline-offset: 1px; }
+
+button { font: 700 .95rem var(--font-ui); color: var(--fg); background: var(--panel); border: 1px solid var(--line); border-radius: 999px; padding: 10px 16px; cursor: pointer; min-height: 44px; }
+button:focus-visible { outline: 2px solid var(--cue); outline-offset: 2px; }
+button.primary { background: var(--cue); color: #14110a; border-color: var(--cue); }
+
+/* ---------- Stage ---------- */
+#stage { position: fixed; inset: 0; background: var(--bg); overflow: hidden; }
+#viewport { position: absolute; inset: 0; overflow: hidden; }
+#text { position: absolute; left: 0; right: 0; top: 0; padding-inline: max(6vw, env(safe-area-inset-left, 0px)) max(6vw, env(safe-area-inset-right, 0px)); font-family: var(--font-read); font-weight: 700; line-height: 1.35; white-space: pre-wrap; overflow-wrap: break-word; will-change: transform; }
+#text.mirror { transform-origin: center; }
+.pad { height: 50vh; }
+
+/* reading line at ~1/3 height, near the lens */
+#guide { position: absolute; left: 0; right: 0; top: 33%; height: 0; pointer-events: none; }
+#guide::before, #guide::after { content: ""; position: absolute; top: -10px; border: 10px solid transparent; }
+#guide::before { left: 0; border-left-color: var(--cue); }
+#guide::after { right: 0; border-right-color: var(--cue); }
+.fade-top, .fade-bot { position: absolute; left: 0; right: 0; pointer-events: none; }
+.fade-top { top: 0; height: 18%; background: linear-gradient(var(--bg), transparent); }
+.fade-bot { bottom: 0; height: 22%; background: linear-gradient(transparent, var(--bg)); }
+
+#controls { position: absolute; left: 0; right: 0; bottom: 0; display: flex; align-items: center; justify-content: center; gap: 10px; flex-wrap: wrap; padding: 10px 16px calc(10px + env(safe-area-inset-bottom, 0px)); background: color-mix(in srgb, var(--bg) 82%, transparent); border-top: 1px solid var(--line); transition: opacity .3s; }
+#controls.hide { opacity: 0; pointer-events: none; }
+.ctl { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: .8rem; text-transform: uppercase; letter-spacing: .08em; }
+.ctl b { color: var(--fg); min-width: 2.2em; text-align: center; font-variant-numeric: tabular-nums; letter-spacing: 0; }
+.ctl button { padding: 6px 12px; min-height: 40px; min-width: 40px; }
+#play { min-width: 96px; }
+
+#rotate { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; text-align: center; padding: 24px; color: var(--muted); font-size: 1rem; pointer-events: none; }
+@media (orientation: portrait) { #stage:not(.playing) #rotate { display: flex; } #stage:not(.playing) #rotate ~ #viewport { opacity: .25; } }
+#rotate p { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px 18px; margin: 0; }
+
+@media (prefers-reduced-motion: reduce) { #controls { transition: none; } }
+</style>
+</head>
+<body>
+
+<section id="editor">
+  <div class="ed-head">
+    <h1>Tele<span>prompter</span></h1>
+    <button class="primary" id="start" type="button">Start prompter ▶</button>
+  </div>
+  <div class="hint">Paste your script below. Your text is saved on this phone. Turn the phone sideways before you press Start.</div>
+  <textarea id="script" spellcheck="false" aria-label="Script">Hi everyone, and thanks for watching.
+
+Today I want to share something I've been working on for the last few months.
+
+Take a breath here.
+
+The idea is simple: make it easier for people to say what they mean, clearly, on camera.
+
+Look at the lens, not at the words. Let the text come to you.
+
+Pause.
+
+That's it for today. If this helped, let me know, and I'll see you in the next one.</textarea>
+</section>
+
+<section id="stage" hidden>
+  <div id="rotate"><p>Turn your phone sideways for a wider line.<br>Then press Play.</p></div>
+  <div id="viewport"><div id="text"></div></div>
+  <div class="fade-top"></div><div class="fade-bot"></div>
+  <div id="guide"></div>
+  <div id="controls">
+    <button id="back" type="button" aria-label="Back to editor">✎ Edit</button>
+    <button id="restart" type="button" aria-label="Restart from top">⟲</button>
+    <button id="play" class="primary" type="button">▶ Play</button>
+    <div class="ctl">Speed <button id="slower" type="button" aria-label="Slower">−</button><b id="speedVal">3</b><button id="faster" type="button" aria-label="Faster">+</button></div>
+    <div class="ctl">Size <button id="smaller" type="button" aria-label="Smaller text">A−</button><button id="bigger" type="button" aria-label="Bigger text">A+</button></div>
+    <button id="mirror" type="button" aria-pressed="false">Mirror</button>
+    <button id="full" type="button">Fullscreen</button>
+  </div>
+</section>
+
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const editor = $('editor'), stage = $('stage'), script = $('script'), text = $('text');
+  const controls = $('controls'), playBtn = $('play');
+  const store = {
+    get(k, d) { try { const v = localStorage.getItem('tp_' + k); return v === null ? d : v; } catch { return d; } },
+    set(k, v) { try { localStorage.setItem('tp_' + k, v); } catch {} }
+  };
+
+  // Speed level 1..10 maps to pixels per second (gentle at the low end).
+  const SPEEDS = [12, 20, 28, 38, 50, 64, 80, 100, 125, 155];
+  let speed = +store.get('speed', 3), size = +store.get('size', 7), mirrored = store.get('mirror', '0') === '1';
+  let y = 0, playing = false, last = 0, hideTimer = 0, wakeLock = null;
+
+  const saved = store.get('script', null);
+  if (saved !== null) script.value = saved;
+  script.addEventListener('input', () => store.set('script', script.value));
+
+  function maxY() { return Math.max(0, text.scrollHeight - stage.clientHeight * 0.33); }
+  function render() {
+    text.style.transform = `translateY(${-y}px)` + (mirrored ? ' scaleX(-1)' : '');
+  }
+  function applySize() {
+    // size in vmin-ish steps so it adapts to landscape height
+    text.style.fontSize = `calc(${size * 0.9}vmin + 8px)`;
+    store.set('size', size);
+  }
+  function applySpeed() { $('speedVal').textContent = speed; store.set('speed', speed); }
+
+  function build() {
+    text.textContent = '';
+    const top = document.createElement('div'); top.className = 'pad'; top.style.height = '33vh';
+    const body = document.createElement('div'); body.textContent = script.value.trim() || 'Your script is empty. Tap Edit to add text.';
+    const end = document.createElement('div'); end.className = 'pad';
+    text.append(top, body, end);
+  }
+
+  function tick(t) {
+    if (!playing) return;
+    const dt = last ? Math.min(0.1, (t - last) / 1000) : 0;
+    last = t;
+    y += SPEEDS[speed - 1] * dt;
+    if (y >= maxY()) { y = maxY(); render(); pause(); return; }
+    render();
+    requestAnimationFrame(tick);
+  }
+
+  async function keepAwake() {
+    try { if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); } catch {}
+  }
+  function play() {
+    if (y >= maxY()) y = 0;
+    playing = true; last = 0;
+    stage.classList.add('playing');
+    playBtn.textContent = '❚❚ Pause';
+    keepAwake();
+    requestAnimationFrame(tick);
+    scheduleHide();
+  }
+  function pause() {
+    playing = false;
+    stage.classList.remove('playing');
+    playBtn.textContent = '▶ Play';
+    showControls();
+  }
+  function toggle() { playing ? pause() : play(); }
+
+  function showControls() { controls.classList.remove('hide'); clearTimeout(hideTimer); }
+  function scheduleHide() { clearTimeout(hideTimer); hideTimer = setTimeout(() => { if (playing) controls.classList.add('hide'); }, 2200); }
+
+  $('start').onclick = () => {
+    editor.hidden = true; stage.hidden = false;
+    build(); applySize(); applySpeed(); y = 0; render();
+    $('mirror').setAttribute('aria-pressed', mirrored);
+    showControls();
+  };
+  $('back').onclick = () => { pause(); stage.hidden = true; editor.hidden = false; };
+  $('restart').onclick = e => { e.stopPropagation(); y = 0; render(); };
+  playBtn.onclick = e => { e.stopPropagation(); toggle(); };
+  $('slower').onclick = e => { e.stopPropagation(); speed = Math.max(1, speed - 1); applySpeed(); };
+  $('faster').onclick = e => { e.stopPropagation(); speed = Math.min(10, speed + 1); applySpeed(); };
+  $('smaller').onclick = e => { e.stopPropagation(); size = Math.max(3, size - 1); applySize(); y = Math.min(y, maxY()); render(); };
+  $('bigger').onclick = e => { e.stopPropagation(); size = Math.min(20, size + 1); applySize(); render(); };
+  $('mirror').onclick = e => { e.stopPropagation(); mirrored = !mirrored; store.set('mirror', mirrored ? '1' : '0'); $('mirror').setAttribute('aria-pressed', mirrored); render(); };
+  $('full').onclick = async e => {
+    e.stopPropagation();
+    try {
+      if (document.fullscreenElement) await document.exitFullscreen();
+      else await document.documentElement.requestFullscreen();
+      try { await screen.orientation.lock('landscape'); } catch {}
+    } catch { $('full').textContent = 'Fullscreen n/a'; }
+  };
+  controls.addEventListener('click', e => { e.stopPropagation(); if (playing) scheduleHide(); });
+
+  // Tap anywhere on the text to play/pause. Drag to nudge position.
+  let dragStart = null, dragY = 0, moved = false;
+  const vp = $('viewport');
+  vp.addEventListener('pointerdown', e => { dragStart = e.clientY; dragY = y; moved = false; });
+  vp.addEventListener('pointermove', e => {
+    if (dragStart === null) return;
+    const d = dragStart - e.clientY;
+    if (Math.abs(d) > 8) moved = true;
+    if (moved) { y = Math.min(maxY(), Math.max(0, dragY + d)); render(); }
+  });
+  vp.addEventListener('pointerup', () => {
+    if (!moved) { if (playing && controls.classList.contains('hide')) { showControls(); scheduleHide(); } else toggle(); }
+    dragStart = null;
+  });
+  vp.addEventListener('pointercancel', () => { dragStart = null; });
+
+  document.addEventListener('keydown', e => {
+    if (stage.hidden) return;
+    if (e.code === 'Space') { e.preventDefault(); toggle(); }
+    if (e.key === 'ArrowUp') { speed = Math.min(10, speed + 1); applySpeed(); }
+    if (e.key === 'ArrowDown') { speed = Math.max(1, speed - 1); applySpeed(); }
+  });
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && playing) keepAwake(); });
+  window.addEventListener('resize', () => { if (!stage.hidden) { y = Math.min(y, maxY()); render(); } });
+})();
+</script>
+</body>
+</html>
